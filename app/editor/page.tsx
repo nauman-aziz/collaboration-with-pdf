@@ -1,114 +1,103 @@
 // app/editor/page.tsx
 'use client';
 
-// ─── 1) Wire up the PDF.js worker ─────────────────────
+// ─── PDF.js worker setup ───────────────────────────────
 import workerSrc from 'pdfjs-dist/build/pdf.worker.entry';
 import { GlobalWorkerOptions } from 'pdfjs-dist/legacy/build/pdf';
 if (typeof window !== 'undefined') {
   GlobalWorkerOptions.workerSrc = workerSrc;
 }
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, {
+  useState,
+  useEffect,
+  useRef,
+  useCallback,
+} from 'react';
 import { useRouter } from 'next/navigation';
+import html2canvas from 'html2canvas';
 import EditablePDFPage, { TextItem } from '@/components/EditablePDFPage';
-import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
+import { PDFDocument } from 'pdf-lib';
 
 export default function EditorPage() {
   const router = useRouter();
+  const containerRef = useRef<HTMLDivElement>(null);
 
-  // ─── State ───────────────────────────────────────────
-  // raw bytes of original PDF
-  const [originalBytes, setOriginalBytes] = useState<Uint8Array | null>(null);
-  // how many pages in it
-  const [numPages, setNumPages]         = useState(0);
-  // which page we’re editing
-  const [pageIndex, setPageIndex]       = useState(0);
+  // raw bytes & page count
+  const [bytes, setBytes]     = useState<Uint8Array|null>(null);
+  const [numPages, setNumPages] = useState(0);
+  const [pageIndex, setPageIndex] = useState(0);
 
-  // store edits per page
-  // editsByPage[page] = Array<{ item: TextItem; newStr: string }>
+  // edits store
   const [editsByPage, setEditsByPage] = useState<
     Record<number, { item: TextItem; newStr: string }[]>
   >({});
 
-  // ─── Load from sessionStorage ONCE ────────────────────
+  // 1) Load the PDF bytes from sessionStorage once
   useEffect(() => {
     const stored = sessionStorage.getItem('pdfFile');
-    if (!stored) return void router.push('/');
+    if (!stored) {
+      router.push('/');
+      return;
+    }
     try {
       const { data } = JSON.parse(stored) as { data: number[] };
       const u8 = new Uint8Array(data);
-      setOriginalBytes(u8);
-      // determine page count
-      PDFDocument.load(u8).then(pdf => setNumPages(pdf.getPageCount()));
+      setBytes(u8);
+      // count pages
+      import('pdf-lib').then(({ PDFDocument }) =>
+        PDFDocument.load(u8).then(pdf => setNumPages(pdf.getPageCount()))
+      );
     } catch {
       router.push('/');
     }
   }, [router]);
 
-  // ─── Called by EditablePDFPage whenever you change text on a page ─
+  // 2) Handler from the in-place editor
   const handlePageChange = useCallback(
-    (pg: number, edits: { item: TextItem; newStr: string }[]) => {
-      setEditsByPage(prev => ({ ...prev, [pg]: edits }));
+    (pg: number, arr: { item: TextItem; newStr: string }[]) => {
+      setEditsByPage(prev => ({ ...prev, [pg]: arr }));
     },
     []
   );
 
-  // ─── When you click “Download Edited PDF” ───────────────
+  // 3) On Download, snapshot the entire editor container
   const downloadEdited = useCallback(async () => {
-    if (!originalBytes) return;
-    const pdfDoc = await PDFDocument.load(originalBytes);
-    const helv   = await pdfDoc.embedFont(StandardFonts.Helvetica);
+    if (!bytes || !containerRef.current) return;
 
-    // apply every saved edit exactly once
-    for (const [pgStr, arr] of Object.entries(editsByPage)) {
-      const pgNum = Number(pgStr);
-      const page  = pdfDoc.getPages()[pgNum];
-      const { height } = page.getSize();
+    // draw the container (PDF + overlays) to a canvas
+    const snap = await html2canvas(containerRef.current, {
+      scale: window.devicePixelRatio,
+      backgroundColor: '#ffffff',
+    });
 
-      arr.forEach(({ item, newStr }) => {
-        // unpack the exact PDF.js transform
-        const [a, b, c, d, tx, ty] = item.transform;
-        // flip y for pdf-lib
-        const pdfY = height - ty;
+    // embed that image into a fresh PDF
+    const pdfDoc = await PDFDocument.create();
+    const pngUrl = snap.toDataURL('image/png');
+    const img    = await pdfDoc.embedPng(pngUrl);
+    const { width, height } = img.scale(1);
+    const page   = pdfDoc.addPage([width, height]);
+    page.drawImage(img, { x: 0, y: 0, width, height });
 
-        // 1) white-out the original text run
-        page.drawRectangle({
-          x:      tx,
-          y:      pdfY - item.height,
-          width:  item.width,
-          height: item.height,
-          color:  rgb(1, 1, 1),
-        });
-
-        // 2) redraw using the *same* matrix for perfect alignment
-        page.drawText(newStr, {
-          font:   helv,
-          color:  rgb(0, 0, 0),
-          matrix: [a, b, c, d, tx, pdfY],
-        });
-      });
-    }
-
-    // save & download
-    const modified = await pdfDoc.save();
-    const blob     = new Blob([modified], { type: 'application/pdf' });
+    // trigger download
+    const pdfBytes = await pdfDoc.save();
+    const blob     = new Blob([pdfBytes], { type: 'application/pdf' });
     const url      = URL.createObjectURL(blob);
-    const a        = document.createElement('a');
-    a.href         = url;
-    a.download     = 'edited.pdf';
-    a.click();
+    const link     = document.createElement('a');
+    link.href      = url;
+    link.download  = 'edited-page.pdf';
+    link.click();
     URL.revokeObjectURL(url);
-  }, [originalBytes, editsByPage]);
+  }, [bytes]);
 
-  // ─── render states ────────────────────────────────────
-  if (!originalBytes) {
+  if (!bytes) {
     return <div className="p-8 text-center">Loading PDF…</div>;
   }
 
   return (
     <div className="flex h-screen">
-      {/* ◀️ LEFT pane: select page + in-place editor */}
-      <div className="flex-1 border-r overflow-auto p-4">
+      {/* ── LEFT: Editor preview ───────────────────────── */}
+      <div className="flex-1 overflow-auto p-4" ref={containerRef}>
         <div className="mb-4 flex items-center gap-2">
           <label className="font-medium">Page:</label>
           <select
@@ -123,26 +112,26 @@ export default function EditorPage() {
         </div>
 
         <EditablePDFPage
-          data={originalBytes}
+          data={bytes}
           pageIndex={pageIndex}
           zoom={1}
           onChange={handlePageChange}
         />
       </div>
 
-      {/* ▶️ RIGHT pane: download button */}
+      {/* ── RIGHT: Download ──────────────────────────────── */}
       <div className="w-1/3 p-4 flex flex-col">
         <h2 className="text-xl font-semibold mb-4">Download</h2>
         <button
           onClick={downloadEdited}
           className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700"
         >
-          Download Edited PDF
+          Download Edited Page
         </button>
         <p className="mt-4 text-gray-600 text-sm">
-          All edits are kept in memory and applied exactly once—using the same
-          transform matrix you saw on screen—so your downloaded PDF matches
-          pixel-perfectly.
+          This will capture exactly what you see—your edited page—
+          and embed it as an image in the final PDF, fully replacing
+          the original content.
         </p>
       </div>
     </div>
