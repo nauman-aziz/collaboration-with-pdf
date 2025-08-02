@@ -1,50 +1,41 @@
+// app/page.tsx
 'use client';
 
-import React, { useState, useEffect } from 'react';
-import { useSession } from 'next-auth/react';
+import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import FileUpload from '@/components/FileUpload';
 
 export default function HomePage() {
-  const { data: session, status } = useSession();
+  const [file, setFile] = useState<File|null>(null);
   const router = useRouter();
-  const [file, setFile] = useState<File | null>(null);
 
-  useEffect(() => {
-    if (status === 'unauthenticated') {
-      router.push('/auth');
+  const openEditor = async () => {
+    if (!file) {
+      alert('Please select a PDF first');
+      return;
     }
-  }, [status, router]);
+    const buf = await file.arrayBuffer();
+    sessionStorage.setItem('pdfFile', JSON.stringify({
+      name: file.name,
+      type: file.type,
+      data: Array.from(new Uint8Array(buf)),
+    }));
+    router.push('/editor');
+  };
 
-  useEffect(() => {
-    if (file) {
-      // Store file in session storage for the editor
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        const arrayBuffer = e.target?.result as ArrayBuffer;
-        sessionStorage.setItem('pdfFile', JSON.stringify({
-          name: file.name,
-          size: file.size,
-          type: file.type,
-          data: Array.from(new Uint8Array(arrayBuffer))
-        }));
-        router.push('/editor');
-      };
-      reader.readAsArrayBuffer(file);
-    }
-  }, [file, router]);
-
-  if (status === 'loading') {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="text-lg">Loading...</div>
-      </div>
-    );
-  }
-
-  if (!session) {
-    return null;
-  }
-
-  return <FileUpload onFileSelect={setFile} />;
+  return (
+    <div className="p-8 space-y-4">
+      <h1 className="text-2xl font-bold">PDF Overlay Editor</h1>
+      <input
+        type="file"
+        accept="application/pdf"
+        onChange={e => setFile(e.target.files?.[0]||null)}
+      />
+      <button
+        onClick={openEditor}
+        className="mt-2 px-4 py-2 bg-blue-600 text-white rounded"
+      >
+        Open in Editor
+      </button>
+    </div>
+  );
 }

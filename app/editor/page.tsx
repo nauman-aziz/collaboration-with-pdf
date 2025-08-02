@@ -1,287 +1,144 @@
+// app/editor/page.tsx
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
-import { useSession } from 'next-auth/react';
+// 1) Bundle & point PDF.js at its worker
+import workerSrc from 'pdfjs-dist/build/pdf.worker.entry';
+import { GlobalWorkerOptions } from 'pdfjs-dist/legacy/build/pdf';
+if (typeof window !== 'undefined') {
+  GlobalWorkerOptions.workerSrc = workerSrc;
+}
+
+import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { v4 as uuidv4 } from 'uuid';
-
-import PDFViewer from '@/components/PDFViewer';
-import Toolbar from '@/components/Toolbar';
-import TextEditor from '@/components/TextEditor';
-import ImageHandler from '@/components/ImageHandler';
-import ElementOverlay from '@/components/ElementOverlay';
-import CollaborativeCursors from '@/components/CollaborativeCursors';
-
-import { CollaborationManager } from '@/lib/collaboration';
-import { generateModifiedPDF, downloadPDF } from '@/lib/pdf-utils';
-
-import {
-  EditorElement,
-  TextElement,
-  ImageElement,
-  PDFPage,
-  EditorState,
-  User,
-  Cursor,
-} from '@/types/pdf-editor';
+import EditablePDFPage, { TextItem } from '@/components/EditablePDFPage';
+import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 
 export default function EditorPage() {
-  const { data: session, status } = useSession();
   const router = useRouter();
 
-  // Core state
-  const [file, setFile] = useState<File | null>(null);
-  const [pages, setPages] = useState<PDFPage[]>([]);
-  const [originalPdfBytes, setOriginalPdfBytes] = useState<Uint8Array | null>(null);
+  // Raw bytes loaded from sessionStorage
+  const [bytes, setBytes] = useState<Uint8Array|null>(null);
+  // Number of pages in the PDF
+  const [numPages, setNumPages] = useState(0);
+  // Which page we're editing right now
+  const [pageIndex, setPageIndex] = useState(0);
+  // Accumulated edits: for each pageIndex, an array of { item, newStr }
+  const [editsByPage, setEditsByPage] = useState<
+    Record<number, { item: TextItem; newStr: string }[]>
+  >({});
 
-  // Editor state
-  const [elements, setElements] = useState<EditorElement[]>([]);
-  const [selectedElementId, setSelectedElementId] = useState<string | null>(null);
-  const [currentTool, setCurrentTool] = useState<'select' | 'text' | 'image'>('select');
-  const [zoom, setZoom] = useState(1.0);
-  const [editingElement, setEditingElement] = useState<EditorElement | null>(null);
-
-  // Collaboration state
-  const [collaboration, setCollaboration] = useState<CollaborationManager | null>(null);
-  const [cursors, setCursors] = useState<Map<string, Cursor>>(new Map());
-  const [connectedUsers, setConnectedUsers] = useState(1);
-
-  // Initialize collaboration when user and file are ready
+  // 1️⃣ Load PDF bytes and page count on mount
   useEffect(() => {
-    if (session?.user && file && !collaboration) {
-      const user: User = {
-        id: session.user.id,
-        name: session.user.name || 'Anonymous',
-        email: session.user.email || '',
-        color: (session.user as any).color || '#3B82F6',
-      };
-
-      const documentId = `pdf-${file.name}-${file.size}`;
-      
-      const manager = new CollaborationManager(
-        documentId,
-        user,
-        setElements,
-        setCursors
-      );
-
-      setCollaboration(manager);
+    const s = sessionStorage.getItem('pdfFile');
+    if (!s) {
+      router.push('/');
+      return;
     }
-
-    return () => {
-      if (collaboration) {
-        collaboration.destroy();
-      }
-    };
-  }, [session, file]);
-
-  // Authentication check
-  useEffect(() => {
-    if (status === 'unauthenticated') {
-      router.push('/auth');
-    }
-  }, [status, router]);
-
-  // Handle file upload
-  const handleFileSelect = useCallback(async (selectedFile: File) => {
-    setFile(selectedFile);
-    const arrayBuffer = await selectedFile.arrayBuffer();
-    setOriginalPdfBytes(new Uint8Array(arrayBuffer));
-  }, []);
-
-  // Handle PDF pages loaded
-  const handlePagesLoaded = useCallback((loadedPages: PDFPage[]) => {
-    setPages(loadedPages);
-  }, []);
-
-  // Handle page click for adding elements
-  const handlePageClick = useCallback((x: number, y: number, pageIndex: number) => {
-    if (currentTool === 'text') {
-      const textElement: TextElement = {
-        id: uuidv4(),
-        type: 'text',
-        content: 'New text',
-        x,
-        y,
-        width: 200,
-        height: 30,
-        fontSize: 14,
-        fontFamily: 'Helvetica',
-        color: '#000000',
-        bold: false,
-        italic: false,
-        pageIndex,
-      };
-
-      if (collaboration) {
-        collaboration.addElement(textElement);
-      } else {
-        setElements(prev => [...prev, textElement]);
-      }
-
-      setEditingElement(textElement);
-      setSelectedElementId(textElement.id);
-      setCurrentTool('select');
-    }
-  }, [currentTool, collaboration]);
-
-  // Handle element selection
-  const handleElementSelect = useCallback((id: string) => {
-    setSelectedElementId(id);
-  }, []);
-
-  // Handle element double-click for editing
-  const handleElementDoubleClick = useCallback((element: EditorElement) => {
-    setEditingElement(element);
-  }, []);
-
-  // Handle text element updates
-  const handleTextUpdate = useCallback((updates: Partial<TextElement>) => {
-    if (editingElement && editingElement.type === 'text') {
-      const updatedElement = { ...editingElement, ...updates };
-      
-      if (collaboration) {
-        collaboration.updateElement(editingElement.id, updates);
-      } else {
-        setElements(prev => 
-          prev.map(el => el.id === editingElement.id ? updatedElement : el)
-        );
-      }
-    }
-  }, [editingElement, collaboration]);
-
-  // Handle image addition
-  const handleImageAdd = useCallback((imageData: string, x: number, y: number, pageIndex: number) => {
-    const img = new Image();
-    img.onload = () => {
-      const imageElement: ImageElement = {
-        id: uuidv4(),
-        type: 'image',
-        src: imageData,
-        x,
-        y,
-        width: Math.min(img.width, 200),
-        height: Math.min(img.height, 200),
-        pageIndex,
-      };
-
-      if (collaboration) {
-        collaboration.addElement(imageElement);
-      } else {
-        setElements(prev => [...prev, imageElement]);
-      }
-
-      setSelectedElementId(imageElement.id);
-    };
-    img.src = imageData;
-  }, [collaboration]);
-
-  // Handle image updates
-  const handleImageUpdate = useCallback((id: string, updates: Partial<ImageElement>) => {
-    if (collaboration) {
-      collaboration.updateElement(id, updates);
-    } else {
-      setElements(prev => 
-        prev.map(el => el.id === id ? { ...el, ...updates } : el)
-      );
-    }
-  }, [collaboration]);
-
-  // Handle PDF download
-  const handleDownload = useCallback(async () => {
-    if (!originalPdfBytes || pages.length === 0) return;
-
     try {
-      const modifiedPdfBytes = await generateModifiedPDF(
-        originalPdfBytes,
-        elements,
-        pages.length
-      );
-      downloadPDF(modifiedPdfBytes, `edited-${file?.name || 'document.pdf'}`);
-    } catch (error) {
-      console.error('Error generating PDF:', error);
-      alert('Error generating PDF. Please try again.');
+      const { data } = JSON.parse(s) as { data: number[] };
+      const u8 = new Uint8Array(data);
+      setBytes(u8);
+
+      // Use pdf-lib to quickly get pageCount
+      PDFDocument.load(u8).then(pdf => {
+        setNumPages(pdf.getPageCount());
+      });
+    } catch {
+      router.push('/');
     }
-  }, [originalPdfBytes, elements, pages.length, file?.name]);
+  }, [router]);
 
-  // Handle mouse move for collaboration cursors
-  const handleMouseMove = useCallback((e: React.MouseEvent) => {
-    if (collaboration) {
-      const rect = e.currentTarget.getBoundingClientRect();
-      const x = (e.clientX - rect.left) / zoom;
-      const y = (e.clientY - rect.top) / zoom;
-      collaboration.updateCursor(x, y);
-    }
-  }, [collaboration, zoom]);
+  // 2️⃣ Called by the child when you “Save Page X”
+  const handleSavePage = (pg: number, pageEdits: { item: TextItem; newStr: string }[]) => {
+    setEditsByPage(prev => ({ ...prev, [pg]: pageEdits }));
+  };
 
-  if (status === 'loading') {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="text-lg">Loading...</div>
-      </div>
-    );
+  // 3️⃣ When the user is done, flatten all edits & download
+  const downloadAll = async () => {
+    if (!bytes) return;
+    const pdfDoc = await PDFDocument.load(bytes);
+    const helv   = await pdfDoc.embedFont(StandardFonts.Helvetica);
+
+    Object.entries(editsByPage).forEach(([pgStr, pageEdits]) => {
+      const pgNum = Number(pgStr);
+      const page  = pdfDoc.getPages()[pgNum];
+      const { height } = page.getSize();
+
+      pageEdits.forEach(({ item, newStr }) => {
+        const [, , , , tx, ty] = item.transform;
+        // white-out
+        page.drawRectangle({
+          x: tx,
+          y: height - ty - item.height,
+          width: item.width,
+          height: item.height,
+          color: rgb(1,1,1),
+        });
+        // draw replacement
+        page.drawText(newStr, {
+          x: tx + 1,
+          y: height - ty - item.height + 1,
+          size: item.height * 0.8,
+          font: helv,
+          color: rgb(0,0,0),
+        });
+      });
+    });
+
+    const modified = await pdfDoc.save();
+    const blob = new Blob([modified], { type: 'application/pdf' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href     = url;
+    a.download = 'edited.pdf';
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  if (!bytes) {
+    return <div className="p-8 text-center">Loading PDF…</div>;
   }
-  
-
-  if (!session) {
-    return null;
-  }
-
-  const selectedElement = elements.find(el => el.id === selectedElementId) || null;
-  const selectedImage = selectedElement?.type === 'image' ? selectedElement as ImageElement : null;
 
   return (
-    <div className="min-h-screen bg-gray-50 flex flex-col">
-      <Toolbar
-        currentTool={currentTool}
-        onToolChange={setCurrentTool}
-        zoom={zoom}
-        onZoomChange={setZoom}
-        onDownload={handleDownload}
-        connectedUsers={connectedUsers}
-      />
+    <div className="flex h-screen">
+      {/* ◀️ LEFT: page selector + editable page overlay */}
+      <div className="flex-1 border-r overflow-auto p-4">
+        <div className="mb-4 flex items-center gap-2">
+          <label className="font-medium">Page:</label>
+          <select
+            value={pageIndex}
+            onChange={e => setPageIndex(Number(e.target.value))}
+            className="border px-2 py-1"
+          >
+            {Array.from({ length: numPages }).map((_, i) => (
+              <option key={i} value={i}>
+                {i + 1}
+              </option>
+            ))}
+          </select>
+        </div>
 
-      <div className="flex-1 relative" onMouseMove={handleMouseMove}>
-        <PDFViewer
-          file={file}
-          zoom={zoom}
-          currentPage={0}
-          onPagesLoaded={handlePagesLoaded}
-          onPageClick={handlePageClick}
+        <EditablePDFPage
+          data={bytes}
+          pageIndex={pageIndex}
+          zoom={1}
+          onSaveText={edits => handleSavePage(pageIndex, edits)}
+        />
+      </div>
+
+      {/* ▶️ RIGHT: Download button */}
+      <div className="w-1/3 p-4 flex flex-col">
+        <h2 className="text-xl font-semibold mb-4">Your Edits</h2>
+        <button
+          onClick={downloadAll}
+          className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700"
         >
-          {/* Element Overlay */}
-          <ElementOverlay
-            elements={elements}
-            selectedElementId={selectedElementId}
-            onElementSelect={handleElementSelect}
-            onElementDoubleClick={handleElementDoubleClick}
-            zoom={zoom}
-            pageHeight={pages[0]?.viewport.height || 0}
-          />
-
-          {/* Collaborative Cursors */}
-          <CollaborativeCursors cursors={cursors} zoom={zoom} />
-
-          {/* Text Editor */}
-          {editingElement?.type === 'text' && (
-            <TextEditor
-              element={editingElement as TextElement}
-              onUpdate={handleTextUpdate}
-              onComplete={() => setEditingElement(null)}
-              zoom={zoom}
-            />
-          )}
-        </PDFViewer>
-
-        {/* Image Handler */}
-        {currentTool === 'image' && (
-          <ImageHandler
-            onImageAdd={handleImageAdd}
-            onImageUpdate={handleImageUpdate}
-            selectedImage={selectedImage}
-            zoom={zoom}
-          />
-        )}
+          Download Edited PDF
+        </button>
+        <p className="mt-4 text-gray-600 text-sm">
+          After you click “Save” on a page, those edits are stored. When you’re ready,
+          click “Download Edited PDF” to bake all your changes into the final file.
+        </p>
       </div>
     </div>
   );
