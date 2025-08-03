@@ -1,6 +1,7 @@
+// components/EditablePDFPage.tsx
 'use client';
 
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState, useLayoutEffect } from 'react';
 import * as pdfjs from 'pdfjs-dist/legacy/build/pdf';
 import workerSrc from 'pdfjs-dist/build/pdf.worker.entry';
 import html2canvas from 'html2canvas';
@@ -9,7 +10,7 @@ pdfjs.GlobalWorkerOptions.workerSrc = workerSrc;
 
 export interface TextItem {
   str: string;
-  transform: number[];
+  transform: number[]; // [a, b, c, d, tx, ty]
   width: number;
   height: number;
 }
@@ -29,9 +30,14 @@ export default function EditablePDFPage({
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef    = useRef<HTMLCanvasElement>(null);
+
   const [items, setItems] = useState<TextItem[]>([]);
   const [edits, setEdits] = useState<Map<number,string>>(new Map());
 
+  // store where caret should be restored
+  const caretRef = useRef<{ idx: number; offset: number } | null>(null);
+
+  // 1) Render PDF + extract text runs + init edits + initial snapshot
   useEffect(() => {
     (async () => {
       const dpr = window.devicePixelRatio || 1;
@@ -39,7 +45,7 @@ export default function EditablePDFPage({
       const page = await pdf.getPage(pageIndex + 1);
       const vp = page.getViewport({ scale: zoom });
 
-      // size the canvas
+      // set up HiDPI canvas
       const cnv = canvasRef.current!;
       cnv.width  = vp.width * dpr;
       cnv.height = vp.height * dpr;
@@ -48,10 +54,9 @@ export default function EditablePDFPage({
       const ctx = cnv.getContext('2d')!;
       ctx.scale(dpr, dpr);
 
-      // render
       await page.render({ canvasContext: ctx, viewport: vp }).promise;
 
-      // extract text runs
+      // pull text items
       const txt = await page.getTextContent();
       const its: TextItem[] = txt.items.map((t: any) => ({
         str:       t.str,
@@ -61,55 +66,82 @@ export default function EditablePDFPage({
       }));
       setItems(its);
 
-      // init edits
+      // init edits to original
       const m = new Map<number,string>();
       its.forEach((_, i) => m.set(i, its[i].str));
       setEdits(m);
 
-      // snapshot after paint, with extra 10% height padding
+      // snapshot
       requestAnimationFrame(() => {
-        if (containerRef.current) {
-          const W = containerRef.current.scrollWidth;
-          const H = containerRef.current.scrollHeight * dpr * 1.1; // +10%
-          html2canvas(containerRef.current, {
-            scale: dpr,
-            backgroundColor: null,
-            width: W * dpr,
-            height: H,
-          }).then(c => onSnapshot(pageIndex, c.toDataURL('image/png')));
-        }
+        if (!containerRef.current) return;
+        const W = containerRef.current.scrollWidth;
+        const H = containerRef.current.scrollHeight * dpr * 1.1;
+        html2canvas(containerRef.current, {
+          scale: dpr,
+          backgroundColor: null,
+          width:  W * dpr,
+          height: H,
+        }).then(cnv => onSnapshot(pageIndex, cnv.toDataURL('image/png')));
       });
     })();
   }, [data, pageIndex, zoom, onSnapshot]);
 
-  const handleInput = (idx: number, txt: string) => {
-    // debugger;
+  // 2) Restore caret right after edits cause a re-render
+  useLayoutEffect(() => {
+    const info = caretRef.current;
+    if (!info) return;
+    const sel = window.getSelection();
+    sel?.removeAllRanges();
+
+    const div = containerRef.current?.querySelector<HTMLElement>(`[data-idx="${info.idx}"]`);
+    if (div && div.firstChild) {
+      const range = document.createRange();
+      range.setStart(div.firstChild, Math.min(info.offset, div.innerText.length));
+      range.collapse(true);
+      sel?.addRange(range);
+      div.focus();
+    }
+    caretRef.current = null;
+  }, [edits]);
+
+  // 3) Handle edits & trigger snapshot
+  const handleInput = (idx: number, newText: string) => {
+    // capture current caret position
+    const sel = window.getSelection();
+    if (sel && sel.rangeCount > 0) {
+      const range = sel.getRangeAt(0);
+      caretRef.current = {
+        idx,
+        offset: range.startOffset,
+      };
+    }
+
+    // update state
     setEdits(prev => {
       const copy = new Map(prev);
-      copy.set(idx, txt);
-
-      // re-snapshot
-      requestAnimationFrame(() => {
-        if (containerRef.current) {
-          const dpr = window.devicePixelRatio || 1;
-          const W = containerRef.current.scrollWidth;
-          const H = containerRef.current.scrollHeight * dpr * 1.1;
-          html2canvas(containerRef.current, {
-            scale: dpr,
-            backgroundColor: null,
-            width: W * dpr,
-            height: H,
-          }).then(cnv => onSnapshot(pageIndex, cnv.toDataURL('image/png')));
-        }
-      });
-
+      copy.set(idx, newText);
       return copy;
+    });
+
+    // snapshot next frame
+    requestAnimationFrame(() => {
+      if (!containerRef.current) return;
+      const dpr = window.devicePixelRatio || 1;
+      const W   = containerRef.current.scrollWidth;
+      const H   = containerRef.current.scrollHeight * dpr * 1.1;
+      html2canvas(containerRef.current, {
+        scale: dpr,
+        backgroundColor: null,
+        width:  W * dpr,
+        height: H,
+      }).then(cnv => onSnapshot(pageIndex, cnv.toDataURL('image/png')));
     });
   };
 
   return (
-    <div ref={containerRef} className="relative inline-block" >
+    <div ref={containerRef} className="relative inline-block" style={{ paddingBottom: '10%' }}>
       <canvas ref={canvasRef} className="block" style={{ pointerEvents: 'none' }} />
+
       {items.map((it, i) => {
         const [, , , , tx, ty] = it.transform;
         const left = tx * zoom;
@@ -120,24 +152,27 @@ export default function EditablePDFPage({
         return (
           <div
             key={i}
+            data-idx={i}
             contentEditable
             suppressContentEditableWarning
-            onInput={(e) => handleInput(i, e.currentTarget.innerText)}
+            dir="ltr"
+            onInput={e => handleInput(i, e.currentTarget.innerText)}
             className="absolute"
             style={{
               left,
               top,
-              width: it.width * zoom,
-              height: it.height * zoom * 1.9, // +10%
-              fontSize: `${it.height * zoom * 0.9}px`,
-              lineHeight: 1,
-              whiteSpace: "pre",
-              overflow: "hidden",
-              backgroundColor: "#fff",
-              pointerEvents: "all",
-              userSelect: "text",
-              zIndex: 10,
-              border: "none",
+              width:           it.width * zoom,
+              height:          it.height * zoom * 1.9,
+              fontSize:        `${it.height * zoom}px`,
+              lineHeight:      1,
+              whiteSpace:      'pre',
+              overflow:        'visible',
+              backgroundColor: '#fff',
+              pointerEvents:   'all',
+              userSelect:      'text',
+              unicodeBidi:     'plaintext',
+              outline:         'none',
+              zIndex:          10,
             }}
           >
             {edits.get(i)}
