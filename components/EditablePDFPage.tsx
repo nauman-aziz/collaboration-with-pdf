@@ -83,6 +83,7 @@ export default function EditablePDFPage({
   }, [data, pageIndex, zoom, onSnapshot]);
 
   const handleInput = (idx: number, txt: string) => {
+    // debugger;
     setEdits(prev => {
       const copy = new Map(prev);
       copy.set(idx, txt);
@@ -107,7 +108,7 @@ export default function EditablePDFPage({
   };
 
   return (
-    <div ref={containerRef} className="relative inline-block" style={{ paddingBottom: '10%' }}>
+    <div ref={containerRef} className="relative inline-block" >
       <canvas ref={canvasRef} className="block" style={{ pointerEvents: 'none' }} />
       {items.map((it, i) => {
         const [, , , , tx, ty] = it.transform;
@@ -121,21 +122,22 @@ export default function EditablePDFPage({
             key={i}
             contentEditable
             suppressContentEditableWarning
-            onInput={e => handleInput(i, e.currentTarget.innerText)}
+            onInput={(e) => handleInput(i, e.currentTarget.innerText)}
             className="absolute"
             style={{
               left,
               top,
-              width:            it.width * zoom,
-              height:           it.height * zoom * 1.9,    // +10%
-              fontSize:         `${it.height * zoom}px`,
-              lineHeight:       1,
-              whiteSpace:       'pre',
-              overflow:         'hidden',
-              backgroundColor:  '#fff',
-              pointerEvents:    'all',
-              userSelect:       'text',
-              zIndex:           10,
+              width: it.width * zoom,
+              height: it.height * zoom * 1.9, // +10%
+              fontSize: `${it.height * zoom * 0.9}px`,
+              lineHeight: 1,
+              whiteSpace: "pre",
+              overflow: "hidden",
+              backgroundColor: "#fff",
+              pointerEvents: "all",
+              userSelect: "text",
+              zIndex: 10,
+              border: "none",
             }}
           >
             {edits.get(i)}
