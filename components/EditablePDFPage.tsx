@@ -139,7 +139,7 @@ export default function EditablePDFPage({
   };
 
   return (
-    <div ref={containerRef} className="relative inline-block" style={{ paddingBottom: '10%' }}>
+    <div ref={containerRef} className="relative inline-block" >
       <canvas ref={canvasRef} className="block" style={{ pointerEvents: 'none' }} />
 
       {items.map((it, i) => {
@@ -156,23 +156,22 @@ export default function EditablePDFPage({
             contentEditable
             suppressContentEditableWarning
             dir="ltr"
-            onInput={e => handleInput(i, e.currentTarget.innerText)}
+            onInput={(e) => handleInput(i, e.currentTarget.innerText)}
             className="absolute"
             style={{
               left,
               top,
-              width:           it.width * zoom,
-              height:          it.height * zoom * 1.9,
-              fontSize:        `${it.height * zoom}px`,
-              lineHeight:      1,
-              whiteSpace:      'pre',
-              overflow:        'visible',
-              backgroundColor: '#fff',
-              pointerEvents:   'all',
-              userSelect:      'text',
-              unicodeBidi:     'plaintext',
-              outline:         'none',
-              zIndex:          10,
+              width: it.width * zoom,
+              height: it.height * zoom * 1.9,
+              fontSize: `${it.height * zoom * 0.9}px`,
+              lineHeight: 1,
+              whiteSpace: "pre",
+              overflow: "visible",
+              backgroundColor: "#fff",
+              pointerEvents: "all",
+              userSelect: "text",
+              unicodeBidi: "plaintext",
+              zIndex: 10,
             }}
           >
             {edits.get(i)}
