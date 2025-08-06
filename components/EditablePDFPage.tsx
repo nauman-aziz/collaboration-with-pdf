@@ -1,4 +1,3 @@
-// components/EditablePDFPage.tsx
 'use client';
 
 import React, { useEffect, useRef, useState, useLayoutEffect } from 'react';
@@ -30,14 +29,10 @@ export default function EditablePDFPage({
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef    = useRef<HTMLCanvasElement>(null);
-
   const [items, setItems] = useState<TextItem[]>([]);
   const [edits, setEdits] = useState<Map<number,string>>(new Map());
-
-  // store where caret should be restored
   const caretRef = useRef<{ idx: number; offset: number } | null>(null);
 
-  // 1) Render PDF + extract text runs + init edits + initial snapshot
   useEffect(() => {
     (async () => {
       const dpr = window.devicePixelRatio || 1;
@@ -45,7 +40,7 @@ export default function EditablePDFPage({
       const page = await pdf.getPage(pageIndex + 1);
       const vp = page.getViewport({ scale: zoom });
 
-      // set up HiDPI canvas
+      // 1) Setup HiDPI canvas
       const cnv = canvasRef.current!;
       cnv.width  = vp.width * dpr;
       cnv.height = vp.height * dpr;
@@ -54,9 +49,20 @@ export default function EditablePDFPage({
       const ctx = cnv.getContext('2d')!;
       ctx.scale(dpr, dpr);
 
+      // 2) Prevent PDF.js from drawing text so we don't white-out underlying graphics
+      const origFill   = ctx.fillText.bind(ctx);
+      const origStroke = ctx.strokeText.bind(ctx);
+      ctx.fillText   = () => {};
+      ctx.strokeText = () => {};
+
+      // 3) Render the page (graphics only)
       await page.render({ canvasContext: ctx, viewport: vp }).promise;
 
-      // pull text items
+      // 4) Restore text drawing methods for html2canvas & overlays
+      ctx.fillText   = origFill;
+      ctx.strokeText = origStroke;
+
+      // 5) Extract text runs
       const txt = await page.getTextContent();
       const its: TextItem[] = txt.items.map((t: any) => ({
         str:       t.str,
@@ -66,12 +72,12 @@ export default function EditablePDFPage({
       }));
       setItems(its);
 
-      // init edits to original
+      // 6) Initialize edits to original strings
       const m = new Map<number,string>();
       its.forEach((_, i) => m.set(i, its[i].str));
       setEdits(m);
 
-      // snapshot
+      // 7) Snapshot for download
       requestAnimationFrame(() => {
         if (!containerRef.current) return;
         const W = containerRef.current.scrollWidth;
@@ -81,19 +87,18 @@ export default function EditablePDFPage({
           backgroundColor: null,
           width:  W * dpr,
           height: H,
-        }).then(cnv => onSnapshot(pageIndex, cnv.toDataURL('image/png')));
+        }).then(cnv2 => onSnapshot(pageIndex, cnv2.toDataURL('image/png')));
       });
     })();
   }, [data, pageIndex, zoom, onSnapshot]);
 
-  // 2) Restore caret right after edits cause a re-render
+  // Restore caret position after rerender
   useLayoutEffect(() => {
     const info = caretRef.current;
     if (!info) return;
     const sel = window.getSelection();
     sel?.removeAllRanges();
-
-    const div = containerRef.current?.querySelector<HTMLElement>(`[data-idx="${info.idx}"]`);
+    const div = containerRef.current?.querySelector<HTMLElement>(`[data-idx=\"${info.idx}\"]`);
     if (div && div.firstChild) {
       const range = document.createRange();
       range.setStart(div.firstChild, Math.min(info.offset, div.innerText.length));
@@ -104,26 +109,21 @@ export default function EditablePDFPage({
     caretRef.current = null;
   }, [edits]);
 
-  // 3) Handle edits & trigger snapshot
+  // Handle text edits
   const handleInput = (idx: number, newText: string) => {
-    // capture current caret position
     const sel = window.getSelection();
-    if (sel && sel.rangeCount > 0) {
-      const range = sel.getRangeAt(0);
-      caretRef.current = {
-        idx,
-        offset: range.startOffset,
-      };
+    if (sel?.rangeCount) {
+      const r = sel.getRangeAt(0);
+      caretRef.current = { idx, offset: r.startOffset };
     }
 
-    // update state
     setEdits(prev => {
       const copy = new Map(prev);
       copy.set(idx, newText);
       return copy;
     });
 
-    // snapshot next frame
+    // Re-snapshot for download
     requestAnimationFrame(() => {
       if (!containerRef.current) return;
       const dpr = window.devicePixelRatio || 1;
@@ -134,12 +134,12 @@ export default function EditablePDFPage({
         backgroundColor: null,
         width:  W * dpr,
         height: H,
-      }).then(cnv => onSnapshot(pageIndex, cnv.toDataURL('image/png')));
+      }).then(cnv2 => onSnapshot(pageIndex, cnv2.toDataURL('image/png')));
     });
   };
 
   return (
-    <div ref={containerRef} className="relative inline-block" >
+    <div ref={containerRef} className="relative inline-block">
       <canvas ref={canvasRef} className="block" style={{ pointerEvents: 'none' }} />
 
       {items.map((it, i) => {
@@ -156,7 +156,7 @@ export default function EditablePDFPage({
             contentEditable
             suppressContentEditableWarning
             dir="ltr"
-            onInput={(e) => handleInput(i, e.currentTarget.innerText)}
+            onInput={e => handleInput(i, e.currentTarget.innerText)}
             className="absolute"
             style={{
               left,
@@ -167,7 +167,6 @@ export default function EditablePDFPage({
               lineHeight: 1,
               whiteSpace: "pre",
               overflow: "visible",
-              backgroundColor: "#fff",
               pointerEvents: "all",
               userSelect: "text",
               unicodeBidi: "plaintext",

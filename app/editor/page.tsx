@@ -1,6 +1,5 @@
 'use client';
 
-// ─── 1) Wire up the PDF.js worker ─────────────────────
 import workerSrc from 'pdfjs-dist/build/pdf.worker.entry';
 import { GlobalWorkerOptions } from 'pdfjs-dist/legacy/build/pdf';
 if (typeof window !== 'undefined') {
@@ -15,11 +14,12 @@ import { PDFDocument } from 'pdf-lib';
 export default function EditorPage() {
   const router = useRouter();
 
-  const [bytes, setBytes] = useState<Uint8Array | null>(null);
+  const [bytes, setBytes]     = useState<Uint8Array | null>(null);
   const [numPages, setNumPages] = useState(0);
   const [pageIndex, setPageIndex] = useState(0);
   const [snapshots, setSnapshots] = useState<Record<number,string>>({});
 
+  // load PDF from sessionStorage
   useEffect(() => {
     const raw = sessionStorage.getItem('pdfFile');
     if (!raw) return void router.push('/');
@@ -33,10 +33,14 @@ export default function EditorPage() {
     }
   }, [router]);
 
+  // collect per-page PNGs
   const handleSnapshot = useCallback((pg: number, dataUrl: string) => {
-    setSnapshots(prev => (prev[pg] === dataUrl ? prev : { ...prev, [pg]: dataUrl }));
+    setSnapshots(prev =>
+      prev[pg] === dataUrl ? prev : { ...prev, [pg]: dataUrl }
+    );
   }, []);
 
+  // build a new PDF with those PNGs and download it
   const handleDownload = useCallback(async () => {
     if (!bytes) return;
     const pdfDoc = await PDFDocument.load(bytes);
@@ -47,6 +51,8 @@ export default function EditorPage() {
       if (!dataUrl) continue;
       const pngImg = await pdfDoc.embedPng(dataUrl);
       const { width, height } = pngImg.scale(1 / DPR);
+
+      // replace page i with your edited snapshot
       pdfDoc.removePage(i);
       const newPage = pdfDoc.insertPage(i, [width, height]);
       newPage.drawImage(pngImg, { x: 0, y: 0, width, height });
