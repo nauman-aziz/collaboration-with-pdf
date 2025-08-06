@@ -8,13 +8,18 @@ if (typeof window !== 'undefined') {
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
-import EditablePDFPage from '@/components/EditablePDFPage';
 import { PDFDocument } from 'pdf-lib';
+import EditablePDFPage from '@/components/EditablePDFPage';
+
+// shadcn/ui components
+import { Button } from '@/components/ui/button';
+import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
+import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select';
+import { Separator } from '@/components/ui/separator';
 
 export default function EditorPage() {
   const router = useRouter();
-
-  const [bytes, setBytes]     = useState<Uint8Array | null>(null);
+  const [bytes, setBytes] = useState<Uint8Array | null>(null);
   const [numPages, setNumPages] = useState(0);
   const [pageIndex, setPageIndex] = useState(0);
   const [snapshots, setSnapshots] = useState<Record<number,string>>({});
@@ -51,8 +56,6 @@ export default function EditorPage() {
       if (!dataUrl) continue;
       const pngImg = await pdfDoc.embedPng(dataUrl);
       const { width, height } = pngImg.scale(1 / DPR);
-
-      // replace page i with your edited snapshot
       pdfDoc.removePage(i);
       const newPage = pdfDoc.insertPage(i, [width, height]);
       newPage.drawImage(pngImg, { x: 0, y: 0, width, height });
@@ -68,45 +71,71 @@ export default function EditorPage() {
     URL.revokeObjectURL(url);
   }, [bytes, numPages, snapshots]);
 
-  if (!bytes) return <div className="p-8 text-center">Loading PDF…</div>;
+  if (!bytes) {
+    return (
+      <div className="flex items-center justify-center h-screen bg-gray-50">
+        <p className="text-lg font-medium text-gray-700">Loading your PDF…</p>
+      </div>
+    );
+  }
 
   return (
-    <div className="flex h-screen">
-      <div className="flex-1 border-r overflow-auto p-4">
-        <div className="mb-4 flex items-center gap-2">
-          <label className="font-medium">Page:</label>
-          <select
-            value={pageIndex}
-            onChange={e => setPageIndex(Number(e.target.value))}
-            className="border px-2 py-1"
-          >
-            {Array.from({ length: numPages }).map((_, i) => (
-              <option key={i} value={i}>{i + 1}</option>
-            ))}
-          </select>
+    <div className="min-h-screen bg-gray-100">
+      {/* Header */}
+      <header className="bg-white shadow">
+        <div className="max-w-7xl mx-auto py-4 px-6">
+          <h1 className="text-2xl font-bold text-gray-800">PDF Editor</h1>
         </div>
+      </header>
 
-        <EditablePDFPage
-          data={bytes}
-          pageIndex={pageIndex}
-          zoom={1}
-          onSnapshot={handleSnapshot}
-        />
-      </div>
+      <main className="max-w-7xl mx-auto p-6 grid grid-cols-3 gap-6">
+        {/* PDF Viewer & Controls */}
+        <Card className="col-span-2 flex flex-col h-[80vh]">
+          <CardHeader>
+            <CardTitle>Page {pageIndex + 1} of {numPages}</CardTitle>
+            <div className="mt-2">
+              <Select value={String(pageIndex)} onValueChange={value => setPageIndex(Number(value))}>
+                <SelectTrigger className="w-32">
+                  <SelectValue placeholder="Select page..." />
+                </SelectTrigger>
+                <SelectContent>
+                  {Array.from({ length: numPages }).map((_, i) => (
+                    <SelectItem key={i} value={String(i)}>{i + 1}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </CardHeader>
+          <Separator />
+          <CardContent className="overflow-auto flex-1">
+            <EditablePDFPage
+              data={bytes}
+              pageIndex={pageIndex}
+              zoom={1}
+              onSnapshot={handleSnapshot}
+            />
+          </CardContent>
+        </Card>
 
-      <div className="w-1/3 p-4 flex flex-col">
-        <h2 className="text-xl font-semibold mb-4">Download</h2>
-        <button
-          onClick={handleDownload}
-          className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700"
-        >
-          Download Edited PDF
-        </button>
-        <p className="mt-4 text-gray-600 text-sm">
-          Each page is replaced with an exact PNG snapshot of your edits,
-          so the output is pixel-perfect with no clipped lines.
-        </p>
-      </div>
+        {/* Download Panel */}
+        <Card className="h-[80vh] flex flex-col justify-between">
+          <div>
+            <CardHeader>
+              <CardTitle>Download Edited PDF</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <p className="text-sm text-gray-600">
+                Each page you edit is converted to a high-fidelity PNG, ensuring pixel-perfect output with no clipping.
+              </p>
+            </CardContent>
+          </div>
+          <div className="p-6">
+            <Button className="w-full py-3 hover:bg-green-500" onClick={handleDownload}>
+              Download Now
+            </Button>
+          </div>
+        </Card>
+      </main>
     </div>
   );
 }

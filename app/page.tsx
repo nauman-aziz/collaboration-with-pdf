@@ -1,8 +1,14 @@
+
 // app/page.tsx
 'use client';
 
-import { useState } from 'react';
+import React, { useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Separator } from '@/components/ui/separator';
 
 export default function HomePage() {
   const [file, setFile] = useState<File|null>(null);
@@ -23,19 +29,41 @@ export default function HomePage() {
   };
 
   return (
-    <div className="p-8 space-y-4">
-      <h1 className="text-2xl font-bold">PDF Overlay Editor</h1>
-      <input
-        type="file"
-        accept="application/pdf"
-        onChange={e => setFile(e.target.files?.[0]||null)}
-      />
-      <button
-        onClick={openEditor}
-        className="mt-2 px-4 py-2 bg-blue-600 text-white rounded"
-      >
-        Open in Editor
-      </button>
+    <div className="min-h-screen bg-gray-100 flex flex-col">
+      <header className="bg-white shadow">
+        <div className="max-w-7xl mx-auto py-4 px-6">
+          <h1 className="text-2xl font-bold text-gray-800">
+            PDF Overlay Editor
+          </h1>
+        </div>
+      </header>
+      <main className="flex-grow flex items-center justify-center">
+        <Card className="w-full max-w-md mx-auto p-6">
+          <CardHeader>
+            <CardTitle>Select a PDF to Edit</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="flex flex-col space-y-2 cursor-pointer ">
+              <Label htmlFor="file">Upload PDF</Label>
+              <Input
+                id="file"
+                type="file"
+                accept="application/pdf"
+                className="w-full cursor-pointer"
+                onChange={(e) => setFile(e.target.files?.[0] || null)}
+              />
+            </div>
+            <Separator className="my-4" />
+            <Button
+              className={`w-full ${file ? "hover:bg-green-500 cursor-pointer" : "bg-gray-300 cursor-no-drop"} `}
+              onClick={openEditor}
+              disabled={!file}
+            >
+              Open in Editor
+            </Button>
+          </CardContent>
+        </Card>
+      </main>
     </div>
   );
 }
